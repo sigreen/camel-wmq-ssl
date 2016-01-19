@@ -6,22 +6,68 @@
        xsi:schemaLocation="
        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
        http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd">
+       
+	<bean class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="location">
+			<value>classpath:wmq.properties</value>
+		</property>
+	</bean>
+       
+  <!-- WebsphereMQ -->
+  <!-- SSL Configuration - Uncomment the following lines to use SSL -->
+  <!-- <bean id="SSLConfiguration" class="com.fusesource.camel.wmq.SSLConfiguration"> -->
+  <!-- <property name="keystore" value="${ssl.keystore}"/> -->
+  <!-- <property name="keystorePassword" value="${ssl.keystore.password.secure}"/> -->
+  <!-- <property name="truststore" value="${ssl.truststore}"/> -->
+  <!-- </bean> -->
+
+  <bean id="wmq" class="org.apache.camel.component.jms.JmsComponent">
+    <property name="transacted" value="true" />
+    <property name="connectionFactory">
+      <bean class="com.ibm.mq.jms.MQConnectionFactory">
+        <!-- transportType=1 means that a TCP/IP connection is used to connect to the MQ broker. -->
+        <property name="transportType" value="1" />
+        <property name="hostName" value="${wmq.hostname}" />
+        <property name="port" value="${wmq.port}" />
+        <property name="channel" value="${wmq.channel}" />
+        <property name="queueManager" value="${wmq.queuemanager}" />
+        <!-- SSL Configuration - Uncomment the following lines to use SSL -->
+        <!-- <property name="SSLCipherSuite" value="${ssl.ciphersuite}"/> -->
+        <!-- <property name="SSLSocketFactory" value="#{SSLConfiguration.SSLSocketFactory}"/> -->
+      </bean>
+    </property>
+  </bean>
 
   <camelContext xmlns="http://camel.apache.org/schema/spring">
-    <!-- here is a sample which processes the input files
-         (leaving them in place - see the 'noop' flag)
-         then performs content based routing on the message using XPath -->
+
+    <onException>
+      <exception>javax.jms.JMSException</exception>
+      <exception>org.springframework.jms.IllegalStateException</exception>
+      <redeliveryPolicy redeliveryDelay="5000" maximumRedeliveries="${wmq.maximumRedeliveries}" logRetryAttempted="true" />
+    </onException>
+
+    <onException>
+      <!-- Any other exception is considered an exception which we can't do anything about. Move the message to an error queue for investigation -->
+      <exception>java.lang.Exception</exception>
+      <handled>
+        <constant>true</constant>
+      </handled>
+      <log message="A message will be moved to the DLQ '{{wmq.queue.DLQ}}' because an exception has been thrown:\n ${exception.stacktrace}" loggingLevel="WARN" logName="audit" />
+      <log message="Caught ${exception.class.name} : ${exception.message} :\n${exception.stacktrace}" loggingLevel="ERROR" />
+      <to uri="wmq:${wmq.queue.DLQ}" />
+    </onException>
+
     <route>
       <from uri="file:src/data?noop=true"/>
       <choice>
         <when>
           <xpath>/person/city = 'London'</xpath>
           <log message="UK message"/>
-          <to uri="file:target/messages/uk"/>
+          <to uri="wmq:${wmq.queue.message.uk}" />
         </when>
         <otherwise>
           <log message="Other message"/>
-          <to uri="file:target/messages/others"/>
+          <to uri="wmq:${wmq.queue.message.others}" />
         </otherwise>
       </choice>
     </route>
